@@ -4,43 +4,29 @@ import (
 	"bytes"
 	"errors"
 	"flag"
-	"io/ioutil"
 	"os"
 	"sync"
 	"testing"
 
 	"github.com/esote/queue"
+	"github.com/esote/queue/internal/tmpdb"
 )
 
-var files = []string{
-	"test.db", // File from ExampleAsyncQueue
-}
-
 func TestMain(m *testing.M) {
+	tmpdb.AddFile("test.db")
 	if !flag.Parsed() {
 		flag.Parse()
 	}
 	ret := m.Run()
-	for _, file := range files {
-		_ = os.Remove(file)
-	}
+	tmpdb.Clean()
 	os.Exit(ret)
-}
-
-func tempFile() (string, error) {
-	f, err := ioutil.TempFile("", "queue-*.db")
-	if err != nil {
-		return "", err
-	}
-	files = append(files, f.Name())
-	return f.Name(), f.Close()
 }
 
 func newQueues() ([]queue.Queue, error) {
 	qs := []queue.Queue{
 		queue.NewMemoryQueue(),
 	}
-	file, err := tempFile()
+	file, err := tmpdb.New()
 	if err != nil {
 		return nil, err
 	}

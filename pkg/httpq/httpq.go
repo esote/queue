@@ -19,7 +19,7 @@ import (
 type Request struct {
 	Body   []byte
 	Method string
-	URL    url.URL
+	URL    *url.URL
 }
 
 // HTTPQueue sends HTTP requests.
@@ -167,7 +167,7 @@ func (q *httpQueue) Close() error {
 }
 
 func (q *httpQueue) handler(data []byte, err error) {
-	if atomic.LoadInt32(&q.closed) == open {
+	if atomic.LoadInt32(&q.closed) == closed {
 		return
 	}
 	if err == queue.ErrEmpty {
