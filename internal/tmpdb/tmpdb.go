@@ -18,6 +18,7 @@ func Clean() {
 	for _, file := range files {
 		_ = os.Remove(file)
 	}
+	files = nil
 }
 
 // AddFile registers a new temporary database file.

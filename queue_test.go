@@ -2,132 +2,120 @@ package queue_test
 
 import (
 	"bytes"
-	"errors"
-	"flag"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/esote/queue"
 	"github.com/esote/queue/internal/tmpdb"
 )
 
 func TestMain(m *testing.M) {
-	tmpdb.AddFile("test.db")
-	if !flag.Parsed() {
-		flag.Parse()
-	}
+	tmpdb.AddFile("test.db") // test.db is from example_test.go
 	ret := m.Run()
 	tmpdb.Clean()
 	os.Exit(ret)
 }
 
-func newQueues() ([]queue.Queue, error) {
-	qs := []queue.Queue{
-		queue.NewMemoryQueue(),
+func newQueues() (map[string]queue.Queue, error) {
+	queues := map[string]queue.Queue{
+		"memory": queue.NewMemoryQueue(),
 	}
 	file, err := tmpdb.New()
 	if err != nil {
 		return nil, err
 	}
-	q, err := queue.NewSqlite3Queue(file)
+	queues["sqlite3"], err = queue.NewSqlite3Queue(file)
 	if err != nil {
 		return nil, err
 	}
-	qs = append(qs, q)
-	return qs, nil
+	return queues, nil
 }
 
-func closeQueues(closers []queue.Queue) error {
-	var err error
-	for _, c := range closers {
-		if err2 := c.Close(); err == nil {
-			err = err2
-		}
-	}
-	return err
-}
-
-func TestQueues(t *testing.T) {
-	qs, err := newQueues()
+func TestQueueSimple(t *testing.T) {
+	queues, err := newQueues()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		if err := closeQueues(qs); err != nil {
-			t.Fatal(err)
-		}
-	}()
-	const n = ^byte(0)
-	for _, q := range qs {
-		for i := byte(0); i < n; i++ {
-			if err = q.Enqueue([]byte{i}); err != nil {
-				t.Fatal(err)
-			}
-		}
-		for i := byte(0); i < n; i++ {
-			data, err := q.Dequeue()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(data, []byte{i}) {
-				t.Fatalf("data != %d", i)
-			}
-		}
-		if _, err = q.Dequeue(); err != queue.ErrEmpty {
-			t.Fatal("err != ErrEmpty")
+	for name, q := range queues {
+		if err = testQueue(q); err != nil {
+			t.Fatalf("queue: %s: %s", name, err)
 		}
 	}
+}
+
+func testQueue(q queue.Queue) error {
+	const n byte = 5
+	for i := byte(0); i < n; i++ {
+		if err := q.Enqueue([]byte{i}); err != nil {
+			return err
+		}
+	}
+	for i := byte(0); i < n; i++ {
+		data, err := q.Dequeue()
+		if err != nil {
+			return err
+		}
+		want := []byte{i}
+		if !bytes.Equal(data, want) {
+			return fmt.Errorf("want %s, have %s", data, want)
+		}
+	}
+	if _, err := q.Dequeue(); err != queue.ErrEmpty {
+		return fmt.Errorf("doesn't return ErrEmpty when empty")
+	}
+	return q.Close()
 }
 
 func TestQueueRace(t *testing.T) {
-	qs, err := newQueues()
+	queues, err := newQueues()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closeQueues(qs)
-	const (
-		n = 100
-		c = 3
-	)
-	for _, q := range qs {
-		var wg sync.WaitGroup
-		wg.Add(2 * c)
-		ex := []byte{3, 2, 1}
-		errs := make(chan error, 2*c)
-		defer close(errs)
-		for i := 0; i < c; i++ {
-			go func() {
-				defer wg.Done()
-				for i := 0; i < n; i++ {
-					if err := q.Enqueue(ex); err != nil {
-						errs <- err
-						return
-					}
-				}
-			}()
-			go func() {
-				defer wg.Done()
-				for i := 0; i < n; i++ {
-					data, err := q.Dequeue()
-					if err != nil {
-						if err != queue.ErrEmpty {
-							errs <- err
-						}
-						return
-					}
-					if !bytes.Equal(data, ex) {
-						errs <- errors.New("data != ex")
-						return
-					}
-				}
-			}()
-		}
-		wg.Wait()
-		select {
-		case err := <-errs:
-			t.Fatal(err)
-		default:
-		}
+	for _, q := range queues {
+		testRace(q)
 	}
+}
+
+func testRace(q queue.Queue) {
+	defer q.Close()
+	const (
+		c = 2
+		n = 4
+	)
+	var wg sync.WaitGroup
+	wg.Add(c * n)
+	quit := make(chan struct{}, c*n)
+	defer close(quit)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-quit:
+					return
+				default:
+				}
+				_ = q.Enqueue(nil)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-quit:
+					return
+				default:
+				}
+				_, _ = q.Dequeue()
+			}
+		}()
+	}
+	time.Sleep(500 * time.Millisecond)
+	for i := 0; i < c*n; i++ {
+		quit <- struct{}{}
+	}
+	wg.Wait()
 }

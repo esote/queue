@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/esote/queue/internal/chanserver"
 )
@@ -15,6 +16,8 @@ func Test(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	const status = http.StatusNotImplemented
+	ch.SetStatusCode(status)
 	url := &url.URL{
 		Scheme: "http",
 		Host:   ch.Addr.String(),
@@ -26,15 +29,20 @@ func Test(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = (&http.Client{}).Do(req); err != nil {
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
 		t.Fatal(err)
 	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != status {
+		t.Fatal(err)
+	}
+	timer := time.NewTimer(5 * time.Millisecond)
 	var r *http.Request
 	select {
 	case r = <-ch.Reqs:
-		break
-	default:
-		t.Fatal("nothing received from reqs")
+	case <-timer.C:
+		t.Fatal("no request received")
 	}
 	rbody, err := ioutil.ReadAll(r.Body)
 	if err != nil {
@@ -46,6 +54,9 @@ func Test(t *testing.T) {
 	if r.URL.Path != url.Path || r.URL.RawQuery != url.RawQuery {
 		t.Fatalf("want %s, have %s", r.URL.String(),
 			url.String())
+	}
+	if r.Method != req.Method {
+		t.Fatalf("want %s, have %s", req.Method, r.Method)
 	}
 	if err = ch.Close(); err != nil {
 		t.Fatal(err)

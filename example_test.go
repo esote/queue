@@ -15,22 +15,18 @@ func ExampleAsyncQueue() {
 		log.Fatal(err)
 	}
 	defer sqlite3.Close()
+
 	handler := func(data []byte, err error) {
-		if err == queue.ErrEmpty {
-			// If the queue will usually be empty, here you can
-			// sleep or use exp-backoff to avoid busy-waiting. With
-			// more knowledge of enqueues its possible to sleep
-			// indefinitely and wake when data is added.
-			time.Sleep(100 * time.Millisecond)
-			return
-		}
 		if err != nil {
 			log.Println(err)
 			return
 		}
+		// Note printing via fmt is racey with multiple workers.
 		fmt.Println(string(data))
 	}
-	q, err := queue.NewAsyncQueue(sqlite3, handler, 2)
+	// q is an async queue, backed by SQLite3, with one worker. It is
+	// generally recommended to have multiple workers.
+	q, err := queue.NewAsyncQueue(sqlite3, handler, 1)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -43,12 +39,10 @@ func ExampleAsyncQueue() {
 		}
 	}
 
-	// The messages will be dequeued "eventually". Closing the async queue
-	// does not block until the queue is empty, it only blocks long enough
-	// to ensure all data is accounted for (either stored in the queue or
-	// done being used by a handler). However, for the purpose of this
-	// example we wait to give the async queue time to process its data.
-	time.Sleep(500 * time.Millisecond)
+	// In an async queue, data will be dequeued "eventually." For the
+	// purposes of this example we wait for all of it to be processed.
+	time.Sleep(10 * time.Millisecond)
+
 	// Output: hi
 	// hello
 	// hey

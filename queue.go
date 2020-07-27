@@ -101,7 +101,7 @@ func (q *sqlite3Queue) Dequeue() ([]byte, error) {
 func (q *sqlite3Queue) Close() error {
 	var err error
 	for _, stmt := range q.st {
-		if err2 := stmt.Close(); err != nil {
+		if err2 := stmt.Close(); err == nil {
 			err = err2
 		}
 	}
@@ -148,7 +148,7 @@ func (q *sqlite3Queue) transact(f func(tx *sql.Tx) error) (err error) {
 	}
 	defer func() {
 		if r := recover(); r != nil && err == nil {
-			err = fmt.Errorf("%s", err)
+			err = fmt.Errorf("%v", r)
 		}
 		if err != nil {
 			_ = tx.Rollback()

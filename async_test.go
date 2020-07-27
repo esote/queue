@@ -1,63 +1,120 @@
 package queue_test
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/esote/queue"
 )
 
-func newAsyncs(qs []queue.Queue, handler queue.Handler, workers int) ([]queue.AsyncQueue, error) {
-	var aqs []queue.AsyncQueue
-	for _, q := range qs {
-		aq, err := queue.NewAsyncQueue(q, handler, workers)
+func TestAsyncSimple(t *testing.T) {
+	const n = 5
+	v := uint32(n)
+	handler := func(data []byte, err error) {
 		if err != nil {
-			return nil, err
+			t.Fatal(err)
 		}
-		aqs = append(aqs, aq)
+		atomic.AddUint32(&v, ^uint32(0))
 	}
-	return aqs, nil
+	q, err := queue.NewAsyncQueue(queue.NewMemoryQueue(), handler, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < n; i++ {
+		if err = q.Enqueue(nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Wait for v to become 0.
+	time.Sleep(10 * time.Millisecond)
+	if atomic.LoadUint32(&v) != 0 {
+		t.Fatal("async: v != 0")
+	}
+	if err = q.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAsyncNoWaiting(t *testing.T) {
+	const n = 5
+	handler := func(data []byte, err error) {
+		time.Sleep(time.Second)
+	}
+	q, err := queue.NewAsyncQueue(queue.NewMemoryQueue(), handler, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < n; i++ {
+		if err = q.Enqueue(nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Close queue while data is still being handled asynchronously.
+	if err = q.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAsyncPanic(t *testing.T) {
+	done := make(chan struct{}, 1)
+	defer close(done)
+	handler := func(data []byte, err error) {
+		defer func() {
+			done <- struct{}{}
+		}()
+		panic("panic")
+	}
+	q, err := queue.NewAsyncQueue(queue.NewMemoryQueue(), handler, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	// Test that we are able to receive from done twice, meaning the queue
+	// continues to work even after the handler panics.
+	for i := 0; i < 2; i++ {
+		if err = q.Enqueue(nil); err != nil {
+			t.Fatal(err)
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-done:
+			timer.Stop()
+		case <-timer.C:
+			t.Fatal("data not dequeued")
+		}
+	}
 }
 
 func TestAsyncRace(t *testing.T) {
 	handler := func(data []byte, err error) {}
-	qs, err := newQueues()
+	const n = 5
+	q, err := queue.NewAsyncQueue(queue.NewMemoryQueue(), handler, n)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closeQueues(qs)
-	aqs, err := newAsyncs(qs, handler, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range aqs {
-		if err = asyncRace(q); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-// Close an async queue while data is being handled.
-func asyncRace(q queue.AsyncQueue) error {
-	quit := make(chan struct{})
+	defer q.Close()
+	var wg sync.WaitGroup
+	wg.Add(n)
+	quit := make(chan struct{}, n)
 	defer close(quit)
-	time.AfterFunc(250*time.Millisecond, func() {
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-quit:
+					return
+				default:
+				}
+				_ = q.Enqueue(nil)
+			}
+		}()
+	}
+	time.Sleep(500 * time.Millisecond)
+	for i := 0; i < n; i++ {
 		quit <- struct{}{}
-	})
-loop:
-	for {
-		select {
-		case <-quit:
-			break loop
-		default:
-		}
-		if err := q.Enqueue([]byte{1}); err != nil {
-			return err
-		}
 	}
-	time.Sleep(25 * time.Millisecond)
-	if err := q.Close(); err != nil {
-		return err
-	}
-	return nil
+	wg.Wait()
 }

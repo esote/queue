@@ -1,6 +1,4 @@
 Package queue implements a few types of queues. Notably an asynchronous queue
 for non-blocking data processing and a SQLite3 queue.
 
-Package httpq is a specialization of the async queue for HTTP requests. It also
-demonstrates handling ErrEmpty in an async queue through conditional variables
-rather than busy waiting.
+Package httpq is a specialization of queue.AsyncQueue for HTTP requests.
